@@ -15,8 +15,12 @@
 # NVIDIA：驱动 + CUDA Toolkit 12+（nvcc 须在 PATH）
 # AMD：OpenCL，构建前 export GPU_BACKEND=opencl
 # OpenCL 可再配合：GPU_BACKEND=opencl ./ubuntu-gpu-miner.sh --install-apt
+# 更省时流程见同目录 ubuntu-oneclick-fast.sh（浅克隆、智能跳过 npm/cargo 等）
 
 set -euo pipefail
+
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(nproc 2>/dev/null || echo 4)}"
+export NPM_CONFIG_UPDATE_NOTIFIER=false
 
 REPO_URL="${REPO_URL:-https://github.com/Hashishdotfun/PoW-Miners.git}"
 WORKDIR="${WORKDIR:-$HOME/PoW-Miners}"
@@ -66,9 +70,10 @@ fi
 RELAYER_WALLET_PATH="${RELAYER_WALLET_PATH:-$WALLET_PATH}"
 
 if [[ "$INSTALL_APT" -eq 1 ]]; then
+  export DEBIAN_FRONTEND=noninteractive
   log "安装编译依赖（需要 sudo）…"
-  sudo apt-get update
-  sudo apt-get install -y build-essential pkg-config libssl-dev curl git ca-certificates python3
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq build-essential pkg-config libssl-dev curl git ca-certificates python3
   if [[ "$GPU_BACKEND" == "opencl" ]]; then
     log "安装 OpenCL 头文件与 ICD 开发包（AMD/Intel 等）…"
     sudo apt-get install -y opencl-headers ocl-icd-opencl-dev clinfo || \
@@ -101,8 +106,12 @@ MINER_BIN="$WORKDIR/gpu-miner/target/release/miner"
 
 if [[ "$MINE_ONLY" -eq 0 ]]; then
   if [[ ! -d "$WORKDIR/.git" ]]; then
-    log "克隆仓库 → $WORKDIR"
-    git clone "$REPO_URL" "$WORKDIR"
+    log "克隆仓库 → $WORKDIR（GIT_DEPTH=${GIT_DEPTH:-0}）"
+    if [[ "${GIT_DEPTH:-0}" != "0" ]]; then
+      git clone --depth "$GIT_DEPTH" "$REPO_URL" "$WORKDIR"
+    else
+      git clone "$REPO_URL" "$WORKDIR"
+    fi
   else
     log "尝试更新 $WORKDIR"
     git -C "$WORKDIR" pull --ff-only || true
@@ -111,7 +120,7 @@ if [[ "$MINE_ONLY" -eq 0 ]]; then
   cd "$WORKDIR"
 
   log "npm install"
-  npm install
+  npm install --no-audit --no-fund --loglevel=error
 
   mkdir -p target/idl
 

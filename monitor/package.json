@@ -1,0 +1,15 @@
+{
+  "name": "pffthash-mining-monitor",
+  "private": true,
+  "type": "module",
+  "description": "实时查询 Hashish PoW 挖矿状态（链上 + 可选本地 MH/s）",
+  "scripts": {
+    "start": "node mining-monitor.mjs",
+    "monitor": "node mining-monitor.mjs"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.95.4",
+    "bs58": "^5.0.0"
+  }
+}
