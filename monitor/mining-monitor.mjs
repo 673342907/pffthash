@@ -34,13 +34,49 @@ const DEFAULT_MINT = new PublicKey(
 );
 
 function loadKeypair(filePath) {
-  const raw = fs.readFileSync(filePath, "utf-8").trim();
-  if (raw.startsWith("[")) {
-    return Keypair.fromSecretKey(new Uint8Array(JSON.parse(raw)));
+  const abs = path.resolve(filePath);
+  if (!fs.existsSync(abs)) {
+    throw new Error(`钱包文件不存在: ${abs}`);
   }
-  return Keypair.fromSecretKey(bs58.decode(raw));
+  const raw = fs.readFileSync(abs, "utf-8").trim();
+  if (!raw) {
+    throw new Error(`钱包文件为空: ${abs}`);
+  }
+  let secret;
+  if (raw.startsWith("[")) {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) {
+      throw new Error(`钱包 JSON 格式错误（应为数字数组）: ${abs}`);
+    }
+    secret = new Uint8Array(arr);
+  } else {
+    try {
+      secret = bs58.decode(raw);
+    } catch {
+      throw new Error(
+        `钱包无法解析（应为 Solana CLI 的 JSON 数组或单行 base58）: ${abs}`,
+      );
+    }
+  }
+  if (secret.length === 64) {
+    try {
+      return Keypair.fromSecretKey(secret);
+    } catch (e) {
+      throw new Error(`无法从文件创建 Keypair: ${abs} — ${e.message}`);
+    }
+  }
+  if (secret.length === 32) {
+    try {
+      return Keypair.fromSeed(secret);
+    } catch (e) {
+      throw new Error(`无法从 seed 创建 Keypair: ${abs} — ${e.message}`);
+    }
+  }
+  throw new Error(
+    `密钥长度不对 (${secret.length} 字节)，应为 64（Solana CLI 导出的整段 keypair）或 32（仅 seed）。` +
+      ` 常见误操作：把公钥当成了钱包、或编辑 id.json 时截断。文件: ${abs}`,
+  );
 }
-
 function readU64LE(buf, off) {
   const view = new DataView(buf.buffer, buf.byteOffset + off, 8);
   return view.getBigUint64(0, true);
