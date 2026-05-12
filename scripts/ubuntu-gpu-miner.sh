@@ -193,8 +193,10 @@ fi
 cd "$WORKDIR"
 need_cmd npx
 
+log "确保 PoW-Miners 内 @types/bs58 可用…"
+npm install --no-save --no-audit --no-fund --loglevel=error @types/bs58 2>/dev/null || true
+
 log "启动 continuous-gpu-miner.ts"
 log "RPC=$RPC_URL"
-# PoW-Miners 上游可能未带 @types/bs58，避免 ts-node 因 TS7016 拒绝启动
 export TS_NODE_TRANSPILE_ONLY=1
 exec npx ts-node --transpile-only standard-miner/continuous-gpu-miner.ts

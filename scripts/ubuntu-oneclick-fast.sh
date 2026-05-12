@@ -264,7 +264,11 @@ fi
 
 cd "$WORKDIR"
 need_cmd npx
+# 即使本轮跳过了 npm install，也补装类型（避免 TS7016）
+log "确保 PoW-Miners 内 @types/bs58 可用…"
+npm install --no-save --no-audit --no-fund --loglevel=error @types/bs58 2>/dev/null || true
+
 log "启动 GPU 矿工… RPC=$RPC_URL"
-# 上游可能缺少 @types/bs58，跳过仅类型检查（TS7016）
+# 上游可能缺少 @types/bs58，双保险：类型包 + 跳过类型检查
 export TS_NODE_TRANSPILE_ONLY=1
 exec npx ts-node --transpile-only standard-miner/continuous-gpu-miner.ts
