@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Bash scripts must stay LF for Ubuntu/WSL
+*.sh text eol=lf
