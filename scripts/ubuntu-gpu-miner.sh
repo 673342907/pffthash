@@ -39,6 +39,8 @@ CUDA_THREADS="${CUDA_THREADS:-256}"
 CUDA_BLOCKS="${CUDA_BLOCKS:-1024}"
 POLL_MS="${POLL_MS:-1500}"
 
+ANCHOR_CLI_VERSION="${ANCHOR_CLI_VERSION:-0.31.1}"
+
 SETUP_ONLY=0
 MINE_ONLY=0
 INSTALL_APT=0
@@ -62,6 +64,33 @@ die() { echo "错误: $*" >&2; exit 1; }
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "未找到命令「$1」，请先安装"; }
 log() { echo "[ubuntu-gpu-miner] $*"; }
 
+glibc_version() {
+  ldd --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+$' || echo "0.0"
+}
+
+path_prefer_cargo_anchor() {
+  # shellcheck disable=SC1091
+  [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
+  export PATH="$HOME/.cargo/bin:$HOME/.avm/bin:$PATH"
+}
+
+anchor_cli_works() {
+  command -v anchor >/dev/null 2>&1 && anchor --version >/dev/null 2>&1
+}
+
+ensure_anchor_for_idl() {
+  path_prefer_cargo_anchor
+  if anchor_cli_works; then
+    log "anchor: $(command -v anchor)"
+    return 0
+  fi
+  need_cmd cargo
+  log "anchor 不可用（avm 常需 GLIBC_2.39）；glibc $(glibc_version)，cargo install anchor-cli ${ANCHOR_CLI_VERSION}…"
+  cargo install anchor-cli --version "$ANCHOR_CLI_VERSION" --locked
+  path_prefer_cargo_anchor
+  anchor_cli_works || die "anchor-cli 仍无法运行；请安装 clang libclang-dev protobuf-compiler 后重试"
+}
+
 if [[ -z "$WALLET_PATH" ]]; then
   die "请设置 WALLET_PATH（Solana 密钥 JSON），例如: export WALLET_PATH=\$HOME/.config/solana/id.json"
 fi
@@ -73,7 +102,8 @@ if [[ "$INSTALL_APT" -eq 1 ]]; then
   export DEBIAN_FRONTEND=noninteractive
   log "安装编译依赖（需要 sudo）…"
   sudo apt-get update -qq
-  sudo apt-get install -y -qq build-essential pkg-config libssl-dev curl git ca-certificates python3
+  sudo apt-get install -y -qq build-essential pkg-config libssl-dev libudev-dev curl git ca-certificates python3 \
+    clang libclang-dev protobuf-compiler
   if [[ "$GPU_BACKEND" == "opencl" ]]; then
     log "安装 OpenCL 头文件与 ICD 开发包（AMD/Intel 等）…"
     sudo apt-get install -y opencl-headers ocl-icd-opencl-dev clinfo || \
@@ -101,6 +131,7 @@ NODE_MAJOR="$(node -p 'parseInt(process.versions.node,10)')"
 need_cmd npm
 need_cmd rustc
 need_cmd cargo
+path_prefer_cargo_anchor
 
 MINER_BIN="$WORKDIR/gpu-miner/target/release/miner"
 
@@ -126,13 +157,10 @@ if [[ "$MINE_ONLY" -eq 0 ]]; then
 
   mkdir -p target/idl
 
-  if command -v anchor >/dev/null 2>&1; then
-    log "拉取 pow_protocol IDL…"
-    anchor idl fetch "$PROGRAM_ID" --provider.cluster mainnet -o target/idl/pow_protocol.json \
-      || die "anchor idl fetch 失败；请安装 Anchor 或手动拷贝 pow_protocol.json 到 target/idl/"
-  else
-    die "未检测到 anchor。请安装后重试，或将 PoW-Programs 的 target/idl/pow_protocol.json 拷到 $WORKDIR/target/idl/"
-  fi
+  ensure_anchor_for_idl
+  log "拉取 pow_protocol IDL…"
+  anchor idl fetch "$PROGRAM_ID" --provider.cluster mainnet -o target/idl/pow_protocol.json \
+    || die "anchor idl fetch 失败；请手动拷贝 pow_protocol.json 到 target/idl/"
 
   [[ -f target/idl/pow_protocol.json ]] || die "缺少 target/idl/pow_protocol.json"
 

@@ -15,6 +15,7 @@
 #   AUTO_RUST=0          关闭自动 rustup（默认 1：无 cargo 时 minimal profile）
 #   GIT_DEPTH=1          浅克隆深度（默认 1；设为 0 则完整克隆）
 #   SKIP_IDL_FETCH=1     若已有 target/idl/pow_protocol.json 则跳过 anchor fetch
+#   ANCHOR_CLI_VERSION=0.31.1   glibc<2.39 时自动 cargo 安装 anchor-cli（避免坏掉的 avm 二进制）
 #   FORCE_NPM=1          强制 npm install
 #   MINER_RESTART_SEC=20  矿工进程异常退出后等待秒数再重启（默认 20）
 #   MINER_LOG_PATH=...    后台模式日志路径（默认 ~/.local/share/pffthash/hashish-miner.log）
@@ -45,6 +46,7 @@ POLL_MS="${POLL_MS:-1500}"
 AUTO_NODE="${AUTO_NODE:-1}"
 AUTO_RUST="${AUTO_RUST:-1}"
 SKIP_IDL_FETCH="${SKIP_IDL_FETCH:-0}"
+ANCHOR_CLI_VERSION="${ANCHOR_CLI_VERSION:-0.31.1}"
 
 NODE_TOOLCHAIN_VER="${NODE_TOOLCHAIN_VER:-20.18.1}"
 # linux-x64 | linux-arm64
@@ -83,6 +85,33 @@ die() { echo "错误: $*" >&2; exit 1; }
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "未找到命令「$1」"; }
 log() { echo "[oneclick-fast] $*"; }
 
+glibc_version() {
+  ldd --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+$' || echo "0.0"
+}
+
+path_prefer_cargo_anchor() {
+  # shellcheck disable=SC1091
+  [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
+  export PATH="$HOME/.cargo/bin:$HOME/.avm/bin:$PATH"
+}
+
+anchor_cli_works() {
+  command -v anchor >/dev/null 2>&1 && anchor --version >/dev/null 2>&1
+}
+
+ensure_anchor_for_idl() {
+  path_prefer_cargo_anchor
+  if anchor_cli_works; then
+    log "anchor: $(command -v anchor) ($(anchor --version 2>&1 | head -1))"
+    return 0
+  fi
+  need_cmd cargo
+  log "anchor 不可用（常见：~/.avm/bin 预编译需 GLIBC_2.39）。glibc $(glibc_version)，cargo install anchor-cli ${ANCHOR_CLI_VERSION}…"
+  cargo install anchor-cli --version "$ANCHOR_CLI_VERSION" --locked
+  path_prefer_cargo_anchor
+  anchor_cli_works || die "anchor-cli 仍无法运行；请 apt 安装 clang libclang-dev protobuf-compiler 后重试"
+}
+
 if [[ -z "$WALLET_PATH" ]]; then
   die "请设置 WALLET_PATH，例如: export WALLET_PATH=\$HOME/.config/solana/id.json"
 fi
@@ -93,7 +122,8 @@ RELAYER_WALLET_PATH="${RELAYER_WALLET_PATH:-$WALLET_PATH}"
 if [[ "$INSTALL_APT" -eq 1 ]]; then
   log "apt 一次装齐（非交互）…"
   sudo apt-get update -qq
-  APT_PKGS=(build-essential pkg-config libssl-dev curl git ca-certificates python3 xz-utils)
+  APT_PKGS=(build-essential pkg-config libssl-dev libudev-dev curl git ca-certificates python3 xz-utils \
+    clang libclang-dev protobuf-compiler)
   [[ "$GPU_BACKEND" == "opencl" ]] && APT_PKGS+=(opencl-headers ocl-icd-opencl-dev clinfo)
   sudo apt-get install -y -qq "${APT_PKGS[@]}" || die "apt 安装失败"
 fi
@@ -150,6 +180,7 @@ ensure_rust() {
 
 ensure_node
 ensure_rust
+path_prefer_cargo_anchor
 need_cmd npm
 
 if [[ "$GPU_BACKEND" != "cuda" && "$GPU_BACKEND" != "opencl" ]]; then
@@ -207,12 +238,11 @@ if [[ "$MINE_ONLY" -eq 0 ]]; then
 
   if [[ -f "$IDL_PATH" && "$SKIP_IDL_FETCH" == "1" ]]; then
     log "跳过 IDL 拉取（SKIP_IDL_FETCH=1 且文件已存在）"
-  elif command -v anchor >/dev/null 2>&1; then
+  else
+    ensure_anchor_for_idl
     log "拉取 pow_protocol IDL…"
     anchor idl fetch "$PROGRAM_ID" --provider.cluster mainnet -o "$IDL_PATH" \
-      || die "anchor idl fetch 失败；可手动放置 pow_protocol.json 后 export SKIP_IDL_FETCH=1"
-  else
-    [[ -f "$IDL_PATH" ]] || die "无 anchor：请将 pow_protocol.json 放到 $WORKDIR/$IDL_PATH 或安装 Anchor"
+      || die "anchor idl fetch 失败；可手动放置 pow_protocol.json 到 $WORKDIR/$IDL_PATH 后 export SKIP_IDL_FETCH=1"
   fi
 
   [[ -f "$IDL_PATH" ]] || die "缺少 $IDL_PATH"
