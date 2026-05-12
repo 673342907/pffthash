@@ -196,7 +196,16 @@ need_cmd npx
 log "确保 PoW-Miners 内 @types/bs58 可用…"
 npm install --no-save --no-audit --no-fund --loglevel=error @types/bs58 2>/dev/null || true
 
-log "启动 continuous-gpu-miner.ts"
-log "RPC=$RPC_URL"
 export TS_NODE_TRANSPILE_ONLY=1
-exec npx ts-node --transpile-only standard-miner/continuous-gpu-miner.ts
+MINER_RESTART_SEC="${MINER_RESTART_SEC:-20}"
+
+log "启动 continuous-gpu-miner.ts（异常退出后每 ${MINER_RESTART_SEC}s 自动重启；Ctrl+C 结束）"
+log "后台常驻与监控请用: ubuntu-oneclick-fast.sh --mine-only --background（同目录 scripts）"
+log "RPC=$RPC_URL"
+set +e
+while true; do
+  npx ts-node --transpile-only standard-miner/continuous-gpu-miner.ts
+  ec=$?
+  log "矿工退出 (code=$ec)，${MINER_RESTART_SEC}s 后重启…"
+  sleep "$MINER_RESTART_SEC"
+done

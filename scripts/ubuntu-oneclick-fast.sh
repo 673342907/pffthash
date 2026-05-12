@@ -8,6 +8,7 @@
 #   ./ubuntu-oneclick-fast.sh --install-apt          # 首次：装系统包 + 全流程
 #   ./ubuntu-oneclick-fast.sh --install-apt --setup-only
 #   ./ubuntu-oneclick-fast.sh --mine-only
+#   ./ubuntu-oneclick-fast.sh --mine-only --background   # 后台挖 + 写日志（配合 monitor 看 MH/s）
 #
 # 环境变量（可选）：
 #   AUTO_NODE=0          关闭自动安装 Node（默认 1：无 Node 或 <18 时装到 ~/.local/pow-miners-node）
@@ -15,9 +16,13 @@
 #   GIT_DEPTH=1          浅克隆深度（默认 1；设为 0 则完整克隆）
 #   SKIP_IDL_FETCH=1     若已有 target/idl/pow_protocol.json 则跳过 anchor fetch
 #   FORCE_NPM=1          强制 npm install
-#   FORCE_REBUILD=1      强制重新 cargo build
+#   MINER_RESTART_SEC=20  矿工进程异常退出后等待秒数再重启（默认 20）
+#   MINER_LOG_PATH=...    后台模式日志路径（默认 ~/.local/share/pffthash/hashish-miner.log）
+#   MINER_PID_FILE=...    后台模式 PID 文件（默认 ~/.local/share/pffthash/hashish-miner.pid）
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 REPO_URL="${REPO_URL:-https://github.com/Hashishdotfun/PoW-Miners.git}"
 WORKDIR="${WORKDIR:-$HOME/PoW-Miners}"
@@ -48,13 +53,18 @@ NODE_PLATFORM="${NODE_PLATFORM:-}"
 SETUP_ONLY=0
 MINE_ONLY=0
 INSTALL_APT=0
+BACKGROUND=0
+
+MINER_LOG_PATH="${MINER_LOG_PATH:-$HOME/.local/share/pffthash/hashish-miner.log}"
+MINER_PID_FILE="${MINER_PID_FILE:-$HOME/.local/share/pffthash/hashish-miner.pid}"
+MINER_RESTART_SEC="${MINER_RESTART_SEC:-20}"
 
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 export NPM_CONFIG_UPDATE_NOTIFIER=false
 export DEBIAN_FRONTEND=noninteractive
 
 usage() {
-  sed -n '2,16p' "$0" | sed 's/^# \?//'
+  sed -n '2,24p' "$0" | sed 's/^# \?//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -62,6 +72,7 @@ while [[ $# -gt 0 ]]; do
     --setup-only) SETUP_ONLY=1 ;;
     --mine-only)  MINE_ONLY=1 ;;
     --install-apt) INSTALL_APT=1 ;;
+    --background|-b) BACKGROUND=1 ;;
     -h|--help)    usage; exit 0 ;;
     *) echo "未知参数: $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -268,7 +279,67 @@ need_cmd npx
 log "确保 PoW-Miners 内 @types/bs58 可用…"
 npm install --no-save --no-audit --no-fund --loglevel=error @types/bs58 2>/dev/null || true
 
-log "启动 GPU 矿工… RPC=$RPC_URL"
-# 上游可能缺少 @types/bs58，双保险：类型包 + 跳过类型检查
 export TS_NODE_TRANSPILE_ONLY=1
-exec npx ts-node --transpile-only standard-miner/continuous-gpu-miner.ts
+
+WRAPPER_DIR="$HOME/.local/share/pffthash"
+WRAPPER_SH="$WRAPPER_DIR/miner-loop-inner.sh"
+mkdir -p "$WRAPPER_DIR" "$(dirname "$MINER_LOG_PATH")" "$(dirname "$MINER_PID_FILE")"
+
+if [[ "$BACKGROUND" -eq 1 ]]; then
+  if [[ -f "$MINER_PID_FILE" ]]; then
+    opid="$(tr -d ' \n' < "$MINER_PID_FILE" || true)"
+    if [[ -n "${opid:-}" ]] && kill -0 "$opid" 2>/dev/null; then
+      die "后台矿工已在运行 (pid=$opid)。先执行: $SCRIPT_DIR/stop-hashish-miner.sh"
+    fi
+  fi
+  log "写入后台循环脚本: $WRAPPER_SH"
+  cat > "$WRAPPER_SH" <<EOF
+#!/usr/bin/env bash
+# 由 ubuntu-oneclick-fast.sh --background 生成，勿手改（可删，由脚本重建）
+set +e
+cd "$WORKDIR" || exit 1
+export TS_NODE_TRANSPILE_ONLY=1
+export NPM_CONFIG_UPDATE_NOTIFIER=false
+[[ -f "\$HOME/.cargo/env" ]] && . "\$HOME/.cargo/env"
+LOG="$MINER_LOG_PATH"
+INTERVAL=$MINER_RESTART_SEC
+while true; do
+  echo "======================================== [\$(date -Iseconds)] 启动 GPU 矿工" >>"\$LOG"
+  npx ts-node --transpile-only standard-miner/continuous-gpu-miner.ts >>"\$LOG" 2>&1
+  ec=\$?
+  echo "[\$(date -Iseconds)] 矿工退出码=\$ec，\${INTERVAL}s 后自动重启" >>"\$LOG"
+  sleep "\$INTERVAL"
+done
+EOF
+  chmod +x "$WRAPPER_SH"
+  log "以后台方式启动（日志: $MINER_LOG_PATH）…"
+  nohup "$WRAPPER_SH" </dev/null >>"$MINER_LOG_PATH" 2>&1 &
+  echo $! > "$MINER_PID_FILE"
+  sleep 1
+  if kill -0 "$(tr -d ' \n' < "$MINER_PID_FILE")" 2>/dev/null; then
+    log "后台矿工已启动，PID: $(tr -d ' \n' < "$MINER_PID_FILE")（见 $MINER_PID_FILE）"
+  else
+    rm -f "$MINER_PID_FILE"
+    die "后台启动失败，请 tail -f $MINER_LOG_PATH"
+  fi
+  log ""
+  log "算力 MH/s：GPU 进入 Mining 后会把 Progress 行写入上述日志；请用监控读该文件。"
+  log "另开终端运行监控示例："
+  log "  cd ~/pffthash/monitor && npm install --no-audit --no-fund --loglevel=error"
+  log "  export WALLET_PATH=\"\$HOME/.config/solana/id.json\""
+  log "  export RPC_URL=\"（与 miner-config.json 中一致）\""
+  log "  node mining-monitor.mjs --wallet \"\$WALLET_PATH\" --rpc \"\$RPC_URL\" --miner-log \"$MINER_LOG_PATH\""
+  log ""
+  log "停止后台: $SCRIPT_DIR/stop-hashish-miner.sh"
+  exit 0
+fi
+
+set +e
+log "前台挖矿（异常退出后每 ${MINER_RESTART_SEC}s 自动重启；Ctrl+C 结束）…"
+log "算力：进入 Mining 阶段后，界面会显示 Live/Avg MH/s；无 TTY 时请改用 --background + 监控。"
+while true; do
+  npx ts-node --transpile-only standard-miner/continuous-gpu-miner.ts
+  ec=$?
+  log "矿工退出 (code=$ec)，${MINER_RESTART_SEC}s 后重启…"
+  sleep "$MINER_RESTART_SEC"
+done

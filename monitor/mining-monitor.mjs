@@ -12,10 +12,12 @@
  *
  *   # 若矿工输出重定向到文件（示例）：
  *   # npx ts-node standard-miner/continuous-gpu-miner.ts 2>&1 | tee ~/hashish-miner.log
- *   node mining-monitor.mjs --rpc ... --miner-log ~/hashish-miner.log
+ *   # 默认会读 ~/.local/share/pffthash/hashish-miner.log（若存在，与一键脚本 --background 一致）
+ *   node mining-monitor.mjs --rpc ... --wallet ...
  */
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import {
@@ -132,7 +134,7 @@ function parseArgs(argv) {
     rpc: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
     walletPath: process.env.WALLET_PATH || "",
     intervalMs: Number(process.env.POLL_MS || 2000),
-    minerLog: process.env.MINER_LOG || "",
+    minerLog: "",
     poolId: Number(process.env.POOL_ID || 0),
     programId: process.env.PROGRAM_ID || DEFAULT_PROGRAM.toBase58(),
     mint: process.env.MINT || DEFAULT_MINT.toBase58(),
@@ -155,6 +157,16 @@ function parseArgs(argv) {
     else if (a === "-h" || a === "--help") out.help = true;
   }
   return out;
+}
+
+function resolveMinerLogPath(opts) {
+  let p = (opts.minerLog || "").trim();
+  if (p) return path.resolve(p);
+  p = process.env.MINER_LOG || process.env.HASHISH_MINER_LOG || "";
+  if (p) return path.resolve(p);
+  const def = path.join(os.homedir(), ".local/share/pffthash/hashish-miner.log");
+  if (fs.existsSync(def)) return def;
+  return "";
 }
 
 function pdaPowConfig(programId, poolId) {
@@ -181,13 +193,9 @@ async function main() {
   --rpc <url>           Solana RPC（默认 RPC_URL 或 mainnet-beta）
   --wallet <path>       钱包 JSON（默认 WALLET_PATH）
   --interval <ms>       刷新间隔，默认 2000
-  --miner-log <path>    矿工 stdout/stderr 日志，用于解析 Live/Avg MH/s
-  --pool <0|1>          矿池 ID，默认 0
-  --program <pubkey>    程序 ID（默认主网 PoW）
-  --mint <pubkey>       HASH mint（默认主网）
-  --json                每轮一行 JSON（便于脚本采集）
+  --miner-log <path>    矿工日志（解析 Progress 行得到 MH/s）。不设则试 \$HOME/.local/share/pffthash/hashish-miner.log
 
-环境变量: RPC_URL, WALLET_PATH, POLL_MS, MINER_LOG, POOL_ID, PROGRAM_ID, MINT
+环境变量: RPC_URL, WALLET_PATH, POLL_MS, MINER_LOG, HASHISH_MINER_LOG, POOL_ID, PROGRAM_ID, MINT
 `);
     process.exit(0);
   }
@@ -201,6 +209,8 @@ async function main() {
   const programId = new PublicKey(opts.programId);
   const mint = new PublicKey(opts.mint);
   const poolId = Number.isFinite(opts.poolId) ? opts.poolId : 0;
+
+  const minerLogPath = resolveMinerLogPath(opts);
 
   const connection = new Connection(opts.rpc, "confirmed");
   const powConfig = pdaPowConfig(programId, poolId);
@@ -221,7 +231,7 @@ async function main() {
 
     const proto = powInfo?.data ? parsePowConfig(powInfo.data) : null;
     const miner = statsInfo?.data ? parseMinerStats(statsInfo.data) : null;
-    const hr = opts.minerLog ? parseLastHashrateFromLog(opts.minerLog) : null;
+    const hr = minerLogPath ? parseLastHashrateFromLog(minerLogPath) : null;
 
     const row = {
       time: new Date().toISOString(),
@@ -239,6 +249,7 @@ async function main() {
       liveHashrateMhs: hr?.liveMhs ?? null,
       avgHashrateMhs: hr?.avgMhs ?? null,
       hashesCheckedFromLog: hr?.hashesChecked ?? null,
+      minerLogPath: minerLogPath || null,
     };
 
     if (opts.json) {
@@ -272,11 +283,12 @@ async function main() {
       `  ${row.hashBalanceUi ?? "—（无 ATA 或 RPC 错误）"}`,
       "",
       "【算力 MH/s】",
+      minerLogPath ? `  日志文件: ${minerLogPath}` : "  （未指定日志路径）",
       hr
         ? `  Live: ${hr.liveMhs.toFixed(2)} MH/s  |  Avg: ${hr.avgMhs.toFixed(2)} MH/s  |  已试哈希(日志): ${hr.hashesChecked}`
-        : opts.minerLog
-          ? `  日志文件无 Progress 行: ${opts.minerLog}`
-          : "  未指定 --miner-log：无法显示 MH/s（链上不存储 GPU 算力）。\n  请将矿工输出 tee 到文件后传入，例如:\n    ... | tee ~/hashish-miner.log\n    node mining-monitor.mjs --miner-log ~/hashish-miner.log",
+        : minerLogPath
+          ? `  日志中暂无 Progress 行: ${minerLogPath}\n  （GPU 进入 Mining 后才会刷 Live/Avg MH/s）`
+          : `  未配置日志路径，无法显示 MH/s。\n  使用后台矿工: pffthash/scripts/ubuntu-oneclick-fast.sh --mine-only --background\n  或手动: node mining-monitor.mjs --miner-log ~/.local/share/pffthash/hashish-miner.log`,
       "══════════════════════════════════════",
     ];
 
