@@ -1,0 +1,19 @@
+---
+description: Ubuntu/vast 服务器操作必须含 Git 更新步骤
+globs: scripts/**, monitor/**
+---
+
+# pffthash 服务器部署约定
+
+用户代码在 **GitHub**（`673342907/pffthash`），在 **Ubuntu / vast 服务器**上操作时，**任何**涉及「在服务器上执行脚本 / 挖矿 / 监控」的说明，**必须**在其它命令之前包含从 GitHub 拉代码的步骤，例如：
+
+```bash
+cd ~/pffthash
+git fetch origin main
+git reset --hard origin/main
+chmod +x scripts/ubuntu-oneclick-fast.sh scripts/ubuntu-gpu-miner.sh scripts/stop-hashish-miner.sh
+```
+
+若用户习惯 `git pull` 且本地无脏改动，可写 `git pull origin main`，但若服务器曾改脚本导致冲突，优先 **`git fetch` + `git reset --hard origin/main`**。
+
+**禁止**只写「在服务器运行某某脚本」而**不写**先更新仓库，除非用户明确说「代码已在服务器最新、无需 pull」。
