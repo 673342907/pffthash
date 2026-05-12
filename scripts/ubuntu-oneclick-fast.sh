@@ -313,6 +313,7 @@ done
 EOF
   chmod +x "$WRAPPER_SH"
   log "以后台方式启动（日志: $MINER_LOG_PATH）…"
+  : >>"$MINER_LOG_PATH"
   nohup "$WRAPPER_SH" </dev/null >>"$MINER_LOG_PATH" 2>&1 &
   echo $! > "$MINER_PID_FILE"
   sleep 1
