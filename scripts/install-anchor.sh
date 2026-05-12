@@ -95,7 +95,7 @@ fi
 
 if [[ "$USE_CARGO" -eq 1 ]]; then
   log "cargo install anchor-cli $ANCHOR_CLI_VERSION (may take several minutes)…"
-  cargo install "anchor-cli" --version "$ANCHOR_CLI_VERSION" --locked
+  cargo install "anchor-cli" --version "$ANCHOR_CLI_VERSION" --locked --force
 else
   if ! command -v avm >/dev/null 2>&1; then
     log "cargo install avm…"

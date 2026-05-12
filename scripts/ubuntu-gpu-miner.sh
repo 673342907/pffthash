@@ -86,7 +86,7 @@ ensure_anchor_for_idl() {
   fi
   need_cmd cargo
   log "anchor 不可用（avm 常需 GLIBC_2.39）；glibc $(glibc_version)，cargo install anchor-cli ${ANCHOR_CLI_VERSION}…"
-  cargo install anchor-cli --version "$ANCHOR_CLI_VERSION" --locked
+  cargo install anchor-cli --version "$ANCHOR_CLI_VERSION" --locked --force
   path_prefer_cargo_anchor
   anchor_cli_works || die "anchor-cli 仍无法运行；请安装 clang libclang-dev protobuf-compiler 后重试"
 }
