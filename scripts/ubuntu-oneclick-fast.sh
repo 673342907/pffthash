@@ -15,6 +15,7 @@
 #   AUTO_RUST=0          关闭自动 rustup（默认 1：无 cargo 时 minimal profile）
 #   GIT_DEPTH=1          浅克隆深度（默认 1；设为 0 则完整克隆）
 #   SKIP_IDL_FETCH=1     若已有 target/idl/pow_protocol.json 则跳过 anchor fetch
+#   IDL_FALLBACK_URL=... 链上 idl 失败时备用（默认 PoW-Miners 仓库内 pow_protocol.json）
 #   ANCHOR_CLI_VERSION=0.31.1   glibc<2.39 时自动 cargo 安装 anchor-cli（避免坏掉的 avm 二进制）
 #   FORCE_NPM=1          强制 npm install
 #   MINER_RESTART_SEC=20  矿工进程异常退出后等待秒数再重启（默认 20）
@@ -30,6 +31,7 @@ WORKDIR="${WORKDIR:-$HOME/PoW-Miners}"
 GIT_DEPTH="${GIT_DEPTH:-1}"
 
 RPC_URL="${RPC_URL:-https://api.mainnet-beta.solana.com}"
+IDL_FALLBACK_URL="${IDL_FALLBACK_URL:-https://raw.githubusercontent.com/Hashishdotfun/PoW-Miners/main/target/idl/pow_protocol.json}"
 WALLET_PATH="${WALLET_PATH:-}"
 RELAYER_WALLET_PATH="${RELAYER_WALLET_PATH:-}"
 
@@ -110,6 +112,29 @@ ensure_anchor_for_idl() {
   cargo install anchor-cli --version "$ANCHOR_CLI_VERSION" --locked --force
   path_prefer_cargo_anchor
   anchor_cli_works || die "anchor-cli 仍无法运行；请 apt 安装 clang libclang-dev protobuf-compiler 后重试"
+}
+
+idl_anchor_cluster() {
+  if [[ -n "${RPC_URL:-}" && "$RPC_URL" == http* ]]; then
+    printf '%s' "$RPC_URL"
+  else
+    printf '%s' "mainnet"
+  fi
+}
+
+fetch_pow_protocol_idl_file() {
+  local dest="$1" cluster
+  cluster="$(idl_anchor_cluster)"
+  log "anchor idl fetch（provider: ${cluster:0:96}）…"
+  if anchor idl fetch "$PROGRAM_ID" --provider.cluster "$cluster" -o "$dest"; then
+    return 0
+  fi
+  log "链上 IDL 拉取失败（常见：未上链或 RPC 查不到），改用备用: $IDL_FALLBACK_URL"
+  curl -fsSL "$IDL_FALLBACK_URL" -o "$dest" || return 1
+  export IDL_VALIDATE_PATH="$dest"
+  python3 -c 'import json,os; json.load(open(os.environ["IDL_VALIDATE_PATH"]))' || return 1
+  unset IDL_VALIDATE_PATH
+  return 0
 }
 
 if [[ -z "$WALLET_PATH" ]]; then
@@ -240,9 +265,8 @@ if [[ "$MINE_ONLY" -eq 0 ]]; then
     log "跳过 IDL 拉取（SKIP_IDL_FETCH=1 且文件已存在）"
   else
     ensure_anchor_for_idl
-    log "拉取 pow_protocol IDL…"
-    anchor idl fetch "$PROGRAM_ID" --provider.cluster mainnet -o "$IDL_PATH" \
-      || die "anchor idl fetch 失败；可手动放置 pow_protocol.json 到 $WORKDIR/$IDL_PATH 后 export SKIP_IDL_FETCH=1"
+    fetch_pow_protocol_idl_file "$IDL_PATH" \
+      || die "无法取得 pow_protocol.json；请检查 RPC_URL / 网络，或手动放置到 $WORKDIR/$IDL_PATH 后 export SKIP_IDL_FETCH=1"
   fi
 
   [[ -f "$IDL_PATH" ]] || die "缺少 $IDL_PATH"

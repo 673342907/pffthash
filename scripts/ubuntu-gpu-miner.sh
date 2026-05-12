@@ -26,6 +26,7 @@ REPO_URL="${REPO_URL:-https://github.com/Hashishdotfun/PoW-Miners.git}"
 WORKDIR="${WORKDIR:-$HOME/PoW-Miners}"
 
 RPC_URL="${RPC_URL:-https://api.mainnet-beta.solana.com}"
+IDL_FALLBACK_URL="${IDL_FALLBACK_URL:-https://raw.githubusercontent.com/Hashishdotfun/PoW-Miners/main/target/idl/pow_protocol.json}"
 WALLET_PATH="${WALLET_PATH:-}"
 RELAYER_WALLET_PATH="${RELAYER_WALLET_PATH:-}"
 
@@ -89,6 +90,29 @@ ensure_anchor_for_idl() {
   cargo install anchor-cli --version "$ANCHOR_CLI_VERSION" --locked --force
   path_prefer_cargo_anchor
   anchor_cli_works || die "anchor-cli 仍无法运行；请安装 clang libclang-dev protobuf-compiler 后重试"
+}
+
+idl_anchor_cluster() {
+  if [[ -n "${RPC_URL:-}" && "$RPC_URL" == http* ]]; then
+    printf '%s' "$RPC_URL"
+  else
+    printf '%s' "mainnet"
+  fi
+}
+
+fetch_pow_protocol_idl_file() {
+  local dest="$1" cluster
+  cluster="$(idl_anchor_cluster)"
+  log "anchor idl fetch（provider: ${cluster:0:96}）…"
+  if anchor idl fetch "$PROGRAM_ID" --provider.cluster "$cluster" -o "$dest"; then
+    return 0
+  fi
+  log "链上 IDL 拉取失败，改用备用: $IDL_FALLBACK_URL"
+  curl -fsSL "$IDL_FALLBACK_URL" -o "$dest" || return 1
+  export IDL_VALIDATE_PATH="$dest"
+  python3 -c 'import json,os; json.load(open(os.environ["IDL_VALIDATE_PATH"]))' || return 1
+  unset IDL_VALIDATE_PATH
+  return 0
 }
 
 if [[ -z "$WALLET_PATH" ]]; then
@@ -158,9 +182,8 @@ if [[ "$MINE_ONLY" -eq 0 ]]; then
   mkdir -p target/idl
 
   ensure_anchor_for_idl
-  log "拉取 pow_protocol IDL…"
-  anchor idl fetch "$PROGRAM_ID" --provider.cluster mainnet -o target/idl/pow_protocol.json \
-    || die "anchor idl fetch 失败；请手动拷贝 pow_protocol.json 到 target/idl/"
+  fetch_pow_protocol_idl_file target/idl/pow_protocol.json \
+    || die "无法取得 pow_protocol.json；请检查网络或手动拷贝到 target/idl/"
 
   [[ -f target/idl/pow_protocol.json ]] || die "缺少 target/idl/pow_protocol.json"
 
