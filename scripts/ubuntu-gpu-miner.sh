@@ -121,6 +121,8 @@ if [[ "$MINE_ONLY" -eq 0 ]]; then
 
   log "npm install"
   npm install --no-audit --no-fund --loglevel=error
+  log "补装 @types/bs58（避免 ts-node TS7016）…"
+  npm install --no-save --no-audit --no-fund --loglevel=error @types/bs58 2>/dev/null || true
 
   mkdir -p target/idl
 
@@ -193,4 +195,6 @@ need_cmd npx
 
 log "启动 continuous-gpu-miner.ts"
 log "RPC=$RPC_URL"
-exec npx ts-node standard-miner/continuous-gpu-miner.ts
+# PoW-Miners 上游可能未带 @types/bs58，避免 ts-node 因 TS7016 拒绝启动
+export TS_NODE_TRANSPILE_ONLY=1
+exec npx ts-node --transpile-only standard-miner/continuous-gpu-miner.ts

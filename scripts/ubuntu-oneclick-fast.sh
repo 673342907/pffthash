@@ -185,6 +185,8 @@ if [[ "$MINE_ONLY" -eq 0 ]]; then
   if need_npm_install; then
     log "npm install（无 audit/fund，减少输出）…"
     npm install --no-audit --no-fund --loglevel=error
+    log "补装 @types/bs58（上游 PoW-Miners 可能未声明，避免 TS7016）…"
+    npm install --no-save --no-audit --no-fund --loglevel=error @types/bs58 2>/dev/null || true
   else
     log "跳过 npm install（node_modules 已就绪，设 FORCE_NPM=1 可强制）"
   fi
@@ -263,4 +265,6 @@ fi
 cd "$WORKDIR"
 need_cmd npx
 log "启动 GPU 矿工… RPC=$RPC_URL"
-exec npx ts-node standard-miner/continuous-gpu-miner.ts
+# 上游可能缺少 @types/bs58，跳过仅类型检查（TS7016）
+export TS_NODE_TRANSPILE_ONLY=1
+exec npx ts-node --transpile-only standard-miner/continuous-gpu-miner.ts
